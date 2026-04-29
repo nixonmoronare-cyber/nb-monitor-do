@@ -4,34 +4,6 @@
     "inicio": "01/03/2023",
     "fim": "29/04/2026"
   },
-  "total": 3,
-  "resultados": [
-    {
-      "termo_busca": "transferência de potencial construtivo",
-      "titulo": "&times; Filtros do Resultado",
-      "orgao": "",
-      "data_publicacao": "",
-      "link": "",
-      "trecho": "&times; Filtros do Resultado",
-      "coletado_em": "2026-04-29"
-    },
-    {
-      "termo_busca": "transferência de potencial construtivo",
-      "titulo": "Você está vendo resultados para Resultados para",
-      "orgao": "",
-      "data_publicacao": "",
-      "link": "",
-      "trecho": "Você está vendo resultados para Resultados para",
-      "coletado_em": "2026-04-29"
-    },
-    {
-      "termo_busca": "transferência de potencial construtivo",
-      "titulo": "Exibindo 1 - 10 de 2772 Visualizar em sumário",
-      "orgao": "",
-      "data_publicacao": "",
-      "link": "",
-      "trecho": "Exibindo 1 - 10 de 2772 Visualizar em sumário",
-      "coletado_em": "2026-04-29"
-    }
-  ]
+  "total": 0,
+  "resultados": []
 }
