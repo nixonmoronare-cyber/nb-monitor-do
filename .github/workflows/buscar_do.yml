@@ -1,51 +1,33 @@
 # .github/workflows/buscar_do.yml
-# ─────────────────────────────────────────────────────────────
-# Este arquivo é o "agendador automático".
-# O GitHub vai ler estas instruções e executar a busca
-# todo dia às 8h (horário de Brasília = 11h UTC).
-# ─────────────────────────────────────────────────────────────
-
 name: Buscar Diário Oficial SP
 
 on:
   schedule:
-    - cron: '0 11 * * 1-5'   # 08h Brasília, segunda a sexta
+    - cron: '0 11 * * 1-5'   # 08h Brasília (11h UTC), segunda a sexta
   workflow_dispatch:           # Permite rodar manualmente com 1 clique
 
 jobs:
   buscar:
     runs-on: ubuntu-latest
     permissions:
-      contents: write          # Necessário para salvar o resultado no repositório
+      contents: write
 
     steps:
-      # 1. Baixa os arquivos do repositório para a máquina do GitHub
       - name: Baixar repositório
         uses: actions/checkout@v4
 
-      # 2. Instala o Python
       - name: Instalar Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      # 3. Instala as dependências do script
-      - name: Instalar dependências
-        run: |
-          pip install playwright
-          playwright install chromium
-          playwright install-deps chromium
-
-      # 4. Roda o script de busca
       - name: Executar busca no DO
         run: python buscar_do.py
 
-      # 5. Salva o resultado de volta no repositório
-      #    O dashboard vai ler este arquivo
       - name: Salvar resultado
         run: |
           git config user.name  "NB Monitor Bot"
           git config user.email "bot@nb-monitor"
           git add docs/resultados.json
-          git diff --staged --quiet || git commit -m "Atualização automática: $(date '+%d/%m/%Y %H:%M')"
+          git diff --staged --quiet || git commit -m "Atualização: $(date '+%d/%m/%Y %H:%M')"
           git push
