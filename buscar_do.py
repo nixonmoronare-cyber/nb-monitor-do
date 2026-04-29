@@ -24,7 +24,8 @@ KEYWORDS = [
     "ZEPEC",
 ]
 
-DIAS_ATRAS = 1          # 1 = só hoje. Mude para 7 para buscar a semana
+DIAS_ATRAS = None       # None = busca histórico completo desde 01/03/2023
+                        # Coloque um número (ex: 1) para voltar ao modo diário
 BASE_URL   = "https://diariooficial.prefeitura.sp.gov.br/md_epubli_controlador.php"
 SAIDA      = Path("docs/resultados.json")
 # ─────────────────────────────────────────────────────────
@@ -96,7 +97,10 @@ def buscar_termo(page, termo: str, data_inicio: str, data_fim: str) -> list[dict
 
 def main():
     hoje   = date.today()
-    inicio = hoje - timedelta(days=DIAS_ATRAS - 1)
+    if DIAS_ATRAS is None:
+        inicio = date(2023, 3, 1)  # historico completo
+    else:
+        inicio = hoje - timedelta(days=DIAS_ATRAS - 1)
     dt_ini = inicio.strftime("%d/%m/%Y")
     dt_fim = hoje.strftime("%d/%m/%Y")
 
