@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NB Monitor — Diário Oficial</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:#0e0f11;--surface:#16181c;--border:#2a2d35;
+    --gold:#c9a84c;--gold-dim:#7a6330;--green:#3ecf8e;
+    --red:#f06a6a;--blue:#5b9cf6;--muted:#5a5f6e;
+    --text:#e8e9ec;--text-dim:#8b909e;
+    --A:#3ecf8e;--B:#5b9cf6;--C:#f0a94e;--D:#f06a6a;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;font-size:14px;line-height:1.5;min-height:100vh}
+
+  header{border-bottom:1px solid var(--border);padding:18px 32px;display:flex;align-items:center;justify-content:space-between;gap:16px;position:sticky;top:0;background:rgba(14,15,17,.96);backdrop-filter:blur(8px);z-index:100}
+  .brand-name{font-family:'DM Serif Display',serif;font-size:22px;color:var(--gold);letter-spacing:-.5px}
+  .brand-sub{font-size:11px;color:var(--muted);letter-spacing:2px;text-transform:uppercase;font-weight:500;margin-left:10px}
+  .header-right{display:flex;gap:10px;align-items:center}
+
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--muted);display:inline-block;margin-right:6px;flex-shrink:0}
+  .dot.ok{background:var(--green);box-shadow:0 0 8px var(--green)}
+  .dot.loading{background:var(--gold);box-shadow:0 0 8px var(--gold);animation:pulse 1s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+
+  .btn{padding:8px 18px;border-radius:6px;border:none;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:13px;font-weight:500;transition:all .15s;display:inline-flex;align-items:center;gap:6px}
+  .btn-gold{background:var(--gold);color:#0e0f11}.btn-gold:hover{background:#d4b05a}
+  .btn-ghost{background:transparent;color:var(--text-dim);border:1px solid var(--border)}.btn-ghost:hover{border-color:var(--gold-dim);color:var(--text)}
+
+  .container{max-width:1400px;margin:0 auto;padding:24px 32px}
+
+  /* Banner de status */
+  #banner{display:none;border-radius:10px;padding:16px 24px;margin-bottom:20px;font-size:13px;align-items:center;gap:12px}
+  #banner.ok{background:rgba(62,207,142,.08);border:1px solid rgba(62,207,142,.2);display:flex}
+  #banner.warn{background:rgba(201,168,76,.08);border:1px solid rgba(201,168,76,.2);display:flex}
+  #banner.err{background:rgba(240,106,106,.08);border:1px solid rgba(240,106,106,.2);display:flex}
+
+  .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:24px}
+  .kpi{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 20px;position:relative;overflow:hidden}
+  .kpi::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--gold);opacity:.35}
+  .kpi.hl::before{opacity:1}
+  .kpi-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px}
+  .kpi-value{font-family:'DM Mono',monospace;font-size:28px;font-weight:500;color:var(--gold);line-height:1}
+  .kpi-sub{font-size:11px;color:var(--muted);margin-top:4px}
+
+  .controls{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 24px;margin-bottom:20px;display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap}
+  .ctrl-group{display:flex;flex-direction:column;gap:6px}
+  .ctrl-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px}
+  select,input[type=text]{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:8px 12px;color:var(--text);font-family:'DM Sans',sans-serif;font-size:13px;outline:none;transition:border-color .15s}
+  select:focus,input[type=text]:focus{border-color:var(--gold-dim)}
+  input[type=text]{width:220px}
+
+  .tabs{display:flex;gap:4px;margin-bottom:14px}
+  .tab{padding:8px 18px;border-radius:6px;border:1px solid transparent;cursor:pointer;font-size:13px;font-weight:500;color:var(--text-dim);background:transparent;transition:all .15s}
+  .tab.active{background:var(--surface);border-color:var(--border);color:var(--text)}
+  .tab-badge{display:inline-flex;align-items:center;justify-content:center;background:var(--gold);color:#0e0f11;border-radius:10px;padding:1px 7px;font-size:10px;font-weight:600;margin-left:6px}
+
+  .results-wrap{background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden}
+  .results-header{padding:14px 24px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+  table{width:100%;border-collapse:collapse}
+  thead th{padding:10px 14px;text-align:left;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;border-bottom:1px solid var(--border);background:rgba(0,0,0,.2);font-weight:500;white-space:nowrap}
+  tbody tr{border-bottom:1px solid var(--border);transition:background .1s;cursor:pointer}
+  tbody tr:last-child{border-bottom:none}
+  tbody tr:hover{background:rgba(201,168,76,.04)}
+  tbody tr.matched{background:rgba(62,207,142,.04)}
+  tbody tr.matched:hover{background:rgba(62,207,142,.08)}
+  td{padding:11px 14px;vertical-align:middle;font-size:13px;color:var(--text-dim)}
+  td.primary{color:var(--text);font-weight:500}
+
+  .badge{display:inline-flex;align-items:center;padding:2px 9px;border-radius:12px;font-size:11px;font-weight:600;font-family:'DM Mono',monospace}
+  .bA{background:rgba(62,207,142,.15);color:var(--A)}
+  .bB{background:rgba(91,156,246,.15);color:var(--B)}
+  .bC{background:rgba(240,169,78,.15);color:var(--C)}
+  .bD{background:rgba(240,106,106,.15);color:var(--D)}
+  .bDEC{background:rgba(91,156,246,.15);color:var(--blue)}
+  .pill{display:inline-block;background:rgba(201,168,76,.1);color:var(--gold);border-radius:4px;padding:1px 7px;font-size:11px;font-family:'DM Mono',monospace}
+
+  .empty{text-align:center;padding:60px 32px;color:var(--muted)}
+  .empty-icon{font-size:38px;margin-bottom:10px;opacity:.4}
+
+  /* Modal */
+  .overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:200;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+  .overlay.open{display:flex}
+  .modal{background:var(--surface);border:1px solid var(--border);border-radius:12px;width:640px;max-width:95vw;max-height:85vh;overflow-y:auto;padding:28px 32px;position:relative}
+  .modal-close{position:absolute;top:18px;right:18px;background:none;border:none;color:var(--muted);cursor:pointer;font-size:22px;line-height:1}
+  .modal-close:hover{color:var(--text)}
+  .modal-title{font-family:'DM Serif Display',serif;font-size:20px;color:var(--gold);margin-bottom:8px}
+  .modal-section{margin-top:18px;padding-top:18px;border-top:1px solid var(--border)}
+  .modal-section-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:10px}
+  .modal-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .mf-label{font-size:11px;color:var(--muted)}
+  .mf-value{font-size:14px;color:var(--text);font-weight:500;margin-top:2px}
+  .trecho{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:12px;font-size:12px;color:var(--text-dim);line-height:1.7;margin-top:8px}
+  .score-track{height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin-top:4px}
+  .score-fill{height:100%;border-radius:3px;transition:width .6s ease}
+
+  /* Loading skeleton */
+  .skeleton{background:linear-gradient(90deg,var(--surface) 25%,var(--border) 50%,var(--surface) 75%);background-size:400% 100%;animation:shimmer 1.4s ease infinite;border-radius:4px;height:14px;display:inline-block}
+  @keyframes shimmer{0%{background-position:100% 50%}100%{background-position:0 50%}}
+</style>
+</head>
+<body>
+
+<header>
+  <div style="display:flex;align-items:baseline">
+    <span class="brand-name">NB Monitor</span>
+    <span class="brand-sub">Diário Oficial · SP</span>
+  </div>
+  <div class="header-right">
+    <span style="font-size:12px;color:var(--muted);display:flex;align-items:center">
+      <span class="dot" id="dot"></span>
+      <span id="status-txt">Carregando...</span>
+    </span>
+    <button class="btn btn-ghost" onclick="exportCSV()">↓ CSV</button>
+  </div>
+</header>
+
+<div class="container">
+
+  <!-- Banner informativo -->
+  <div id="banner"></div>
+
+  <!-- KPIs -->
+  <div class="kpis">
+    <div class="kpi hl">
+      <div class="kpi-label">Resultados DO</div>
+      <div class="kpi-value" id="kpi-total">—</div>
+      <div class="kpi-sub">publicações encontradas</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Na Base NB</div>
+      <div class="kpi-value" id="kpi-match" style="color:var(--green)">—</div>
+      <div class="kpi-sub">imóveis identificados</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Cat. A + B</div>
+      <div class="kpi-value" id="kpi-ab" style="color:var(--blue)">—</div>
+      <div class="kpi-sub">alta prioridade</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Com DEC</div>
+      <div class="kpi-value" id="kpi-dec" style="color:var(--gold)">—</div>
+      <div class="kpi-sub">declaração ativa</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Atualizado em</div>
+      <div class="kpi-value" id="kpi-data" style="font-size:15px;color:var(--text-dim)">—</div>
+      <div class="kpi-sub" id="kpi-periodo">—</div>
+    </div>
+  </div>
+
+  <!-- Filtros -->
+  <div class="controls">
+    <div class="ctrl-group">
+      <div class="ctrl-label">Filtrar por termo</div>
+      <select id="sel-termo" onchange="renderTabela()">
+        <option value="">Todos os termos</option>
+      </select>
+    </div>
+    <div class="ctrl-group">
+      <div class="ctrl-label">Filtrar por categoria</div>
+      <select id="sel-cat" onchange="renderTabela()">
+        <option value="">Todas categorias</option>
+        <option value="A">A — Alta prioridade</option>
+        <option value="B">B — Média-alta</option>
+        <option value="C">C — Média</option>
+        <option value="D">D — Baixa</option>
+        <option value="sem">Sem match na base</option>
+      </select>
+    </div>
+    <div class="ctrl-group">
+      <div class="ctrl-label">Busca livre</div>
+      <input type="text" id="txt-busca" placeholder="SQL, endereço, proprietário..." oninput="renderTabela()">
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <button class="tab active" onclick="mudarTab('todos',this)">Todos <span class="tab-badge" id="badge-todos">0</span></button>
+    <button class="tab" onclick="mudarTab('match',this)">✦ Na base NB <span class="tab-badge" id="badge-match">0</span></button>
+    <button class="tab" onclick="mudarTab('sem',this)">Novos imóveis <span class="tab-badge" id="badge-sem">0</span></button>
+  </div>
+
+  <!-- Tabela -->
+  <div class="results-wrap">
+    <div class="results-header">
+      <span style="font-size:13px;font-weight:600" id="results-label">Resultados</span>
+      <span style="font-size:12px;color:var(--muted)" id="results-count"></span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Data</th><th>Termo</th><th>Título / Órgão</th>
+          <th>SQL</th><th>Proprietário</th><th>Cat.</th><th>Score</th><th>DEC</th><th></th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <div id="empty" class="empty" style="display:none">
+      <div class="empty-icon">🔍</div>
+      <div style="font-size:15px;color:var(--text-dim);margin-bottom:6px">Nenhum resultado</div>
+      <div>Ajuste os filtros ou aguarde a próxima atualização automática (08h)</div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Modal -->
+<div class="overlay" id="overlay" onclick="if(event.target===this)fecharModal()">
+  <div class="modal" id="modal-body"></div>
+</div>
+
+<script>
+// ── Estado ────────────────────────────────────────────────
+let resultados = [];
+let tabAtiva   = 'todos';
+let baseNB     = {};
+
+const NB_APP = 'https://nb-master-app.vercel.app';
+
+// ── Init ─────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', async () => {
+  setStatus('loading', 'Carregando resultados...');
+  await carregarBaseNB();
+  await carregarResultados();
+});
+
+// ── Carrega resultados.json gerado pelo script Python ────
+async function carregarResultados() {
+  try {
+    // Em produção (GitHub Pages): busca o arquivo gerado automaticamente
+    // Em desenvolvimento local: tenta o mesmo arquivo
+    const resp = await fetch('resultados.json?_=' + Date.now());
+
+    if (!resp.ok) throw new Error('arquivo não encontrado');
+
+    const dados = await resp.json();
+    const hoje  = new Date().toLocaleDateString('pt-BR');
+
+    // Enriquece com dados da base NB
+    resultados = dados.resultados.map(r => enriquecer(r));
+
+    // Ordena: matches primeiro, depois score desc
+    resultados.sort((a,b) => {
+      if (a.nb_match && !b.nb_match) return -1;
+      if (!a.nb_match && b.nb_match) return  1;
+      return (b.nb_score||0) - (a.nb_score||0);
+    });
+
+    // KPIs de data
+    const dataGer = dados.gerado_em
+      ? new Date(dados.gerado_em).toLocaleDateString('pt-BR')
+      : hoje;
+    document.getElementById('kpi-data').textContent    = dataGer;
+    document.getElementById('kpi-periodo').textContent =
+      `${dados.periodo?.inicio||'—'} a ${dados.periodo?.fim||'—'}`;
+
+    // Verifica se os dados são de hoje
+    const isHoje = dados.gerado_em === new Date().toISOString().slice(0,10);
+    if (!isHoje) {
+      mostrarBanner('warn',
+        `⚠️  Os resultados exibidos são de ${dataGer}. A próxima atualização automática ocorre às 08h de hoje (dias úteis).`);
+    } else {
+      mostrarBanner('ok', `✓  Dados atualizados hoje, ${dataGer}.`);
+    }
+
+    atualizarKPIs();
+    populateSelTermo();
+    renderTabela();
+    setStatus('ok', `${resultados.length} resultado(s) · ${dataGer}`);
+
+  } catch(e) {
+    // Arquivo ainda não existe (primeiro acesso antes da primeira execução)
+    mostrarBanner('warn',
+      '⚠️  Nenhum resultado encontrado ainda. O GitHub Actions ainda não executou a primeira busca. ' +
+      'Acesse seu repositório no GitHub, vá em <strong>Actions</strong> e clique em <strong>Run workflow</strong> para rodar agora.');
+    setStatus('loading', 'Aguardando primeira execução');
+    document.getElementById('empty').style.display = 'block';
+  }
+}
+
+// ── Carrega base NB do app ────────────────────────────────
+async function carregarBaseNB() {
+  try {
+    const resp = await fetch(NB_APP, { mode: 'cors' });
+    if (!resp.ok) return;
+    const html = await resp.text();
+    const m = html.match(/(?:const|var|let)\s+(?:DATA|imoveis|data|IMOVEIS)\s*=\s*(\[[\s\S]{100,}?\]);/);
+    if (m) {
+      JSON.parse(m[1]).forEach(im => { baseNB[im.q] = im; });
+    }
+  } catch(e) { /* silencioso — base NB é opcional */ }
+}
+
+// ── Cruzamento ────────────────────────────────────────────
+function enriquecer(r) {
+  const res = { ...r, nb_match:false, nb_sql:null, nb_score:null, nb_cat:null,
+                nb_prop:null, nb_val:null, nb_dec:false, nb_endereco:null };
+  const txt = ((r.titulo||'') + ' ' + (r.trecho||'')).toUpperCase();
+  const sqls = [...new Set([...txt.matchAll(/\b(\d{3}[-.]?\d{3}[-.]?\d{4})\b/g)]
+                .map(m => m[1].replace(/[-.]/g,'')))];
+  res.sqls_txt = sqls;
+  for (const s of sqls) {
+    if (baseNB[s]) {
+      const im = baseNB[s];
+      Object.assign(res, { nb_match:true, nb_sql:s, nb_score:im.sc,
+        nb_cat:im.ct, nb_prop:im.p, nb_val:im.v,
+        nb_dec:im.has_dec, nb_endereco:im.endereco });
+      break;
+    }
+  }
+  return res;
+}
+
+// ── Render ────────────────────────────────────────────────
+function renderTabela() {
+  const q   = document.getElementById('txt-busca').value.toLowerCase();
+  const ft  = document.getElementById('sel-termo').value;
+  const fc  = document.getElementById('sel-cat').value;
+
+  const lista = resultados.filter(r => {
+    if (tabAtiva==='match' && !r.nb_match) return false;
+    if (tabAtiva==='sem'   &&  r.nb_match) return false;
+    if (ft && r.termo_busca!==ft) return false;
+    if (fc==='sem' && r.nb_match) return false;
+    if (fc && fc!=='sem' && r.nb_cat!==fc) return false;
+    if (q) {
+      const h = [r.titulo,r.orgao,r.nb_sql,r.nb_prop,r.nb_endereco,r.trecho]
+        .filter(Boolean).join(' ').toLowerCase();
+      if (!h.includes(q)) return false;
+    }
+    return true;
+  });
+
+  document.getElementById('results-count').textContent =
+    `${lista.length} de ${resultados.length}`;
+
+  document.getElementById('badge-todos').textContent =
+    resultados.length;
+  document.getElementById('badge-match').textContent =
+    resultados.filter(r=>r.nb_match).length;
+  document.getElementById('badge-sem').textContent =
+    resultados.filter(r=>!r.nb_match).length;
+
+  const tbody = document.getElementById('tbody');
+  tbody.innerHTML = '';
+  document.getElementById('empty').style.display = lista.length ? 'none' : 'block';
+
+  for (const r of lista) {
+    const tr = document.createElement('tr');
+    if (r.nb_match) tr.classList.add('matched');
+    tr.onclick = () => abrirModal(r);
+
+    const cat   = r.nb_cat ? `<span class="badge b${r.nb_cat}">${r.nb_cat}</span>` : '—';
+    const score = r.nb_score!=null
+      ? `<span style="font-family:'DM Mono',monospace;color:${scoreColor(r.nb_score)}">${r.nb_score}</span>`
+      : '—';
+    const dec   = r.nb_dec ? '<span class="badge bDEC">DEC</span>' : '—';
+    const sql   = r.nb_sql
+      ? `<span style="font-family:'DM Mono',monospace;font-size:12px;color:var(--green)">${fmtSQL(r.nb_sql)}</span>`
+      : r.sqls_txt?.length
+        ? `<span style="font-family:'DM Mono',monospace;font-size:11px;color:var(--muted)">${r.sqls_txt.slice(0,2).map(fmtSQL).join(' ')}</span>`
+        : '—';
+    const icone = r.nb_match ? '✦ ' : '';
+    const tit   = (icone + (r.titulo||'')).slice(0,70);
+
+    tr.innerHTML = `
+      <td style="white-space:nowrap;font-family:'DM Mono',monospace;font-size:11px">${r.data_publicacao||'—'}</td>
+      <td><span class="pill">${(r.termo_busca||'').slice(0,26)}</span></td>
+      <td class="primary">
+        <div>${tit}${(r.titulo||'').length>70?'…':''}</div>
+        ${r.orgao?`<div style="font-size:11px;color:var(--muted);margin-top:2px">${r.orgao.slice(0,55)}</div>`:''}
+      </td>
+      <td>${sql}</td>
+      <td style="font-size:12px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.nb_prop||'—'}</td>
+      <td>${cat}</td><td>${score}</td><td>${dec}</td>
+      <td>${r.link?`<a href="${r.link}" target="_blank" onclick="event.stopPropagation()" style="color:var(--gold);font-size:12px;text-decoration:none">Ver →</a>`:'—'}</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+function atualizarKPIs() {
+  const m = resultados.filter(r=>r.nb_match);
+  document.getElementById('kpi-total').textContent = resultados.length||'—';
+  document.getElementById('kpi-match').textContent = m.length||'—';
+  document.getElementById('kpi-ab').textContent    = m.filter(r=>r.nb_cat==='A'||r.nb_cat==='B').length||'—';
+  document.getElementById('kpi-dec').textContent   = m.filter(r=>r.nb_dec).length||'—';
+}
+
+function populateSelTermo() {
+  const sel = document.getElementById('sel-termo');
+  sel.innerHTML = '<option value="">Todos os termos</option>';
+  [...new Set(resultados.map(r=>r.termo_busca))].forEach(t => {
+    const o = document.createElement('option');
+    o.value = t; o.textContent = t; sel.appendChild(o);
+  });
+}
+
+// ── Modal ─────────────────────────────────────────────────
+function abrirModal(r) {
+  const scoreBar = r.nb_score!=null ? `
+    <div style="margin-top:4px">
+      <div style="display:flex;justify-content:space-between;font-size:12px">
+        <span style="color:var(--muted)">Score</span>
+        <span style="color:${scoreColor(r.nb_score)};font-family:'DM Mono',monospace">${r.nb_score}/100</span>
+      </div>
+      <div class="score-track"><div class="score-fill" style="width:${r.nb_score}%;background:${scoreColor(r.nb_score)}"></div></div>
+    </div>` : '';
+
+  const nbSec = r.nb_match ? `
+    <div class="modal-section">
+      <div class="modal-section-label">✦ Identificado na base NB</div>
+      <div class="modal-grid">
+        <div><div class="mf-label">SQL</div><div class="mf-value" style="font-family:'DM Mono',monospace">${fmtSQL(r.nb_sql)}</div></div>
+        <div><div class="mf-label">Categoria</div><div class="mf-value"><span class="badge b${r.nb_cat}">${r.nb_cat}</span></div></div>
+        <div><div class="mf-label">Proprietário</div><div class="mf-value">${r.nb_prop||'—'}</div></div>
+        <div><div class="mf-label">DEC</div><div class="mf-value">${r.nb_dec?'<span class="badge bDEC">✓ Possui DEC</span>':'Não emitida'}</div></div>
+        ${r.nb_endereco?`<div style="grid-column:1/-1"><div class="mf-label">Endereço</div><div class="mf-value"><a href="https://www.google.com/maps/search/${encodeURIComponent(r.nb_endereco)}" target="_blank" style="color:var(--gold)">${r.nb_endereco} ↗</a></div></div>`:''}
+        ${r.nb_val?`<div style="grid-column:1/-1"><div class="mf-label">Valor estimado</div><div class="mf-value" style="color:var(--gold)">R$ ${Number(r.nb_val).toLocaleString('pt-BR')}</div></div>`:''}
+        <div style="grid-column:1/-1">${scoreBar}</div>
+      </div>
+      <a href="${NB_APP}" target="_blank" class="btn btn-ghost" style="font-size:12px;margin-top:14px">Abrir na ferramenta NB →</a>
+    </div>` : `
+    <div class="modal-section">
+      <div class="modal-section-label">Cruzamento com base NB</div>
+      <div style="color:var(--muted);font-size:13px">Nenhum SQL identificado no texto desta publicação. Pode ser um imóvel fora da base atual.</div>
+    </div>`;
+
+  document.getElementById('modal-body').innerHTML = `
+    <button class="modal-close" onclick="fecharModal()">×</button>
+    <div class="modal-title">${(r.titulo||'').slice(0,100)}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 4px">
+      <span class="pill">${r.termo_busca||''}</span>
+      ${r.data_publicacao?`<span style="font-size:12px;color:var(--muted);align-self:center">${r.data_publicacao}</span>`:''}
+      ${r.orgao?`<span style="font-size:12px;color:var(--muted);align-self:center">· ${r.orgao}</span>`:''}
+    </div>
+    <div class="modal-section">
+      <div class="modal-section-label">Trecho da publicação</div>
+      <div class="trecho">${r.trecho||'Sem trecho disponível.'}</div>
+      ${r.link?`<a href="${r.link}" target="_blank" style="display:inline-block;margin-top:10px;color:var(--gold);font-size:13px">Ver publicação completa no DO →</a>`:''}
+    </div>
+    ${nbSec}`;
+
+  document.getElementById('overlay').classList.add('open');
+}
+
+function fecharModal() {
+  document.getElementById('overlay').classList.remove('open');
+}
+
+// ── Utils ─────────────────────────────────────────────────
+function mudarTab(tab, el) {
+  tabAtiva = tab;
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  el.classList.add('active');
+  renderTabela();
+}
+
+function setStatus(tipo, msg) {
+  document.getElementById('dot').className = 'dot ' + tipo;
+  document.getElementById('status-txt').textContent = msg;
+}
+
+function mostrarBanner(tipo, html) {
+  const b = document.getElementById('banner');
+  b.className = tipo;
+  b.innerHTML = html;
+  b.style.display = 'flex';
+}
+
+function scoreColor(s) {
+  if (s>=75) return 'var(--A)';
+  if (s>=55) return 'var(--B)';
+  if (s>=35) return 'var(--C)';
+  return 'var(--D)';
+}
+
+function fmtSQL(s) {
+  if (!s) return '';
+  const d = s.replace(/\D/g,'');
+  return d.length===10 ? `${d.slice(0,3)}-${d.slice(3,6)}-${d.slice(6)}` : s;
+}
+
+function exportCSV() {
+  if (!resultados.length) { alert('Nenhum resultado para exportar.'); return; }
+  const cols = ['data_publicacao','termo_busca','titulo','orgao','nb_sql','nb_prop','nb_cat','nb_score','nb_val','nb_dec','nb_endereco','link'];
+  const csv  = '\uFEFF' + [cols.join(';'),
+    ...resultados.map(r => cols.map(c=>`"${String(r[c]??'').replace(/"/g,'""')}"`).join(';'))
+  ].join('\n');
+  const a = Object.assign(document.createElement('a'), {
+    href: URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'})),
+    download: `nb_monitor_${new Date().toISOString().slice(0,10)}.csv`
+  });
+  a.click();
+}
+
+document.addEventListener('keydown', e => { if(e.key==='Escape') fecharModal(); });
+</script>
+</body>
+</html>
