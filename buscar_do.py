@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-buscar_do.py — Monitor do Diário Oficial da Prefeitura de São Paulo
-Estratégia: baixa a edição completa em JSON para cada dia útil
-e filtra pelo texto das matérias. Muito mais confiável que scraping.
+buscar_do.py — Monitor DO-SP v4
+Estratégia definitiva: POST direto para edicao_download com hdnFormato=json
+Baixa a edição completa em JSON para cada dia e filtra pelos termos.
+Sem navegador, sem dependências externas — só Python padrão.
 """
 
-import json, time, re
+import json, time, gzip
+import urllib.request, urllib.parse, urllib.error
 from datetime import date, timedelta
 from pathlib import Path
-import urllib.request
-import urllib.error
 
 # ── Configuração ──────────────────────────────────────────
 KEYWORDS = [
@@ -26,207 +26,127 @@ KEYWORDS = [
 ]
 
 # None = histórico completo desde 01/03/2023
-# Coloque 1 para voltar ao modo diário após a primeira execução
+# Mude para 1 após a primeira execução histórica
 DIAS_ATRAS = None
 
-SAIDA = Path("docs/resultados.json")
-
-# URL base para download do JSON de cada edição por data
-# O portal do DO-SP publica cada edição em JSON acessível por data
-BASE_JSON  = "https://diariooficial.prefeitura.sp.gov.br/md_epubli_memoria_arquivo.php"
-BASE_EDICAO = "https://diariooficial.prefeitura.sp.gov.br/md_epubli_controlador.php"
+SAIDA    = Path("docs/resultados.json")
+BASE_URL = "https://diariooficial.prefeitura.sp.gov.br/md_epubli_controlador.php"
 # ─────────────────────────────────────────────────────────
 
 
-def dias_uteis(inicio: date, fim: date) -> list[date]:
-    """Retorna lista de dias úteis (seg–sex) entre início e fim."""
-    dias = []
-    atual = inicio
-    while atual <= fim:
-        if atual.weekday() < 5:  # 0=seg, 4=sex
-            dias.append(atual)
-        atual += timedelta(days=1)
-    return dias
-
-
-def buscar_edicao_json(data: date) -> dict | None:
+def baixar_edicao_json(data: date) -> list | dict | None:
     """
-    Tenta baixar o JSON da edição do DO para uma data específica.
-    O portal disponibiliza cada edição em múltiplos formatos.
+    Faz POST para edicao_download com hdnFormato=json
+    e retorna o conteúdo JSON da edição daquele dia.
     """
-    # Formatos de URL que o portal usa para acesso por data
-    ano = data.year
-    mes = str(data.month).zfill(2)
-    dia = str(data.day).zfill(2)
+    data_str = data.strftime("%d/%m/%Y")
 
-    # URL do JSON da edição diária
-    url = (
-        f"{BASE_EDICAO}?acao=edicao_consultar"
-        f"&data={dia}%2F{mes}%2F{ano}&formato=J"
-    )
+    form_data = urllib.parse.urlencode({
+        "acao":               "edicao_download",
+        "hdnDtaEdicao":       data_str,
+        "hdnTipoEdicao":      "C",
+        "hdnBolEdicaoGerada": "false",
+        "hdnIdEdicao":        "",
+        "hdnInicio":          "0",
+        "hdnFormato":         "json",
+    }).encode("utf-8")
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; NB-Monitor/2.0; +https://github.com)",
-        "Accept": "application/json, text/html, */*",
+        "User-Agent":   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/120.0.0.0 Safari/537.36",
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Accept":       "application/json, text/plain, */*",
+        "Accept-Language": "pt-BR,pt;q=0.9",
+        "Referer":      BASE_URL + "?acao=diario_aberto&formato=A",
+        "Origin":       "https://diariooficial.prefeitura.sp.gov.br",
     }
 
+    req = urllib.request.Request(
+        BASE_URL + "?acao=edicao_download",
+        data=form_data,
+        headers=headers,
+        method="POST"
+    )
+
     try:
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            content = resp.read()
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            raw = resp.read()
+
+            # Descomprime se necessário
+            enc = resp.headers.get("Content-Encoding", "")
+            if enc == "gzip":
+                raw = gzip.decompress(raw)
+
+            if not raw or len(raw) < 10:
+                return None
+
             # Tenta decodificar como JSON
-            try:
-                return json.loads(content.decode("utf-8"))
-            except Exception:
+            for encoding in ("utf-8", "latin-1"):
                 try:
-                    return json.loads(content.decode("latin-1"))
-                except Exception:
-                    return None
+                    text = raw.decode(encoding)
+                    # Ignora respostas HTML (sem resultados para o dia)
+                    if text.strip().startswith("<"):
+                        return None
+                    return json.loads(text)
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    continue
+            return None
+
+    except urllib.error.HTTPError as e:
+        if e.code not in (404, 500):
+            print(f"    HTTP {e.code}", end=" ")
+        return None
     except Exception:
         return None
 
 
-def buscar_via_pesquisa(termo: str, dt_ini: str, dt_fim: str) -> list[dict]:
+def extrair_texto(obj, profundidade=0) -> str:
+    """Extrai todo o texto de uma estrutura JSON recursivamente."""
+    if profundidade > 8:
+        return ""
+    if isinstance(obj, str):
+        return obj
+    if isinstance(obj, (int, float, bool)):
+        return str(obj)
+    if isinstance(obj, list):
+        return " ".join(extrair_texto(i, profundidade+1) for i in obj)
+    if isinstance(obj, dict):
+        return " ".join(extrair_texto(v, profundidade+1) for v in obj.values())
+    return ""
+
+
+def filtrar_edicao(dados: list | dict, data: date) -> list[dict]:
     """
-    Fallback: usa a URL de pesquisa do portal e extrai links/textos do HTML.
-    Funciona mesmo sem JavaScript pois pega a resposta bruta.
+    Recebe o JSON da edição e retorna as matérias que contêm
+    pelo menos um dos termos monitorados.
     """
-    import urllib.parse
+    resultados = []
+    data_str   = data.strftime("%d/%m/%Y")
 
-    params = urllib.parse.urlencode({
-        "acao": "materias_pesquisar",
-        "chave": termo,
-        "versao_diario": "1",
-        "tipo_resultado": "0",
-        "periodo": "2",
-        "data_inicio": dt_ini,
-        "data_fim": dt_fim,
-    })
-
-    url = f"{BASE_EDICAO}?{params}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; NB-Monitor/2.0)",
-        "Accept-Language": "pt-BR,pt;q=0.9",
-    }
-
-    try:
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=25) as resp:
-            raw = resp.read()
-            try:
-                html = raw.decode("utf-8")
-            except Exception:
-                html = raw.decode("latin-1", errors="replace")
-    except Exception as e:
-        print(f"    Erro HTTP: {e}")
+    # Normaliza: garante que temos uma lista de itens
+    if isinstance(dados, dict):
+        # Tenta encontrar a lista de matérias dentro do dict
+        items = None
+        for chave in ["materias", "materia", "items", "data",
+                      "content", "results", "publicacoes"]:
+            if chave in dados and isinstance(dados[chave], list):
+                items = dados[chave]
+                break
+        if items is None:
+            # Usa os valores do dict como lista
+            items = list(dados.values()) if dados else []
+    elif isinstance(dados, list):
+        items = dados
+    else:
         return []
 
-    resultados = []
-
-    # Extrai matérias do HTML — padrão do portal DO-SP
-    # Cada matéria aparece como bloco com título, data, órgão e link
-    blocos = re.findall(
-        r'<(?:li|div|article)[^>]*class="[^"]*resultado[^"]*"[^>]*>(.*?)</(?:li|div|article)>',
-        html, re.DOTALL | re.IGNORECASE
-    )
-
-    # Fallback: extrai todos os links de matérias
-    if not blocos:
-        links = re.findall(
-            r'href="([^"]*(?:materia_ver|materia_id|edicao_ver)[^"]*)"[^>]*>(.*?)</a>',
-            html, re.DOTALL | re.IGNORECASE
-        )
-        for href, texto in links:
-            texto_limpo = re.sub(r'<[^>]+>', ' ', texto).strip()
-            if len(texto_limpo) < 10:
-                continue
-            link = href if href.startswith("http") else \
-                f"https://diariooficial.prefeitura.sp.gov.br/{href}"
-            resultados.append({
-                "termo_busca":     termo,
-                "titulo":          texto_limpo[:200],
-                "orgao":           "",
-                "data_publicacao": "",
-                "link":            link,
-                "trecho":          texto_limpo[:400],
-                "coletado_em":     date.today().isoformat(),
-            })
-        return resultados
-
-    for bloco in blocos:
-        texto = re.sub(r'<[^>]+>', ' ', bloco)
-        texto = re.sub(r'\s+', ' ', texto).strip()
-        if len(texto) < 10:
+    for item in items:
+        texto_completo = extrair_texto(item).lower()
+        if not texto_completo or len(texto_completo) < 20:
             continue
 
-        link_m = re.search(r'href="([^"]*)"', bloco)
-        link = ""
-        if link_m:
-            href = link_m.group(1)
-            link = href if href.startswith("http") else \
-                f"https://diariooficial.prefeitura.sp.gov.br/{href}"
-
-        titulo_m = re.search(
-            r'<(?:h[2-4]|strong)[^>]*>(.*?)</(?:h[2-4]|strong)>',
-            bloco, re.DOTALL | re.IGNORECASE
-        )
-        titulo = re.sub(r'<[^>]+>', '', titulo_m.group(1)).strip() \
-            if titulo_m else texto[:150]
-
-        resultados.append({
-            "termo_busca":     termo,
-            "titulo":          titulo[:200],
-            "orgao":           "",
-            "data_publicacao": "",
-            "link":            link,
-            "trecho":          texto[:500],
-            "coletado_em":     date.today().isoformat(),
-        })
-
-    return resultados
-
-
-def filtrar_edicao_json(dados: dict, data: date) -> list[dict]:
-    """
-    Filtra uma edição completa em JSON pelos termos de interesse.
-    """
-    resultados = []
-    data_str = data.strftime("%d/%m/%Y")
-
-    # O JSON do DO-SP tem estrutura: lista de matérias com texto, título, órgão
-    # Normaliza diferentes estruturas possíveis
-    materias = []
-    if isinstance(dados, list):
-        materias = dados
-    elif isinstance(dados, dict):
-        for chave in ["materias", "materia", "items", "data", "content", "results"]:
-            if chave in dados and isinstance(dados[chave], list):
-                materias = dados[chave]
-                break
-        if not materias:
-            # Tenta pegar qualquer lista dentro do dict
-            for v in dados.values():
-                if isinstance(v, list) and len(v) > 0:
-                    materias = v
-                    break
-
-    for mat in materias:
-        if not isinstance(mat, dict):
-            continue
-
-        # Extrai texto de campos comuns
-        campos_texto = []
-        for campo in ["titulo", "title", "texto", "text", "conteudo",
-                      "content", "ementa", "descricao", "body", "materia"]:
-            val = mat.get(campo, "")
-            if isinstance(val, str) and val.strip():
-                campos_texto.append(val)
-
-        texto_completo = " ".join(campos_texto).lower()
-        if not texto_completo:
-            continue
-
-        # Verifica se algum termo está presente
+        # Verifica termos
         termo_encontrado = None
         for kw in KEYWORDS:
             if kw.lower() in texto_completo:
@@ -236,25 +156,60 @@ def filtrar_edicao_json(dados: dict, data: date) -> list[dict]:
         if not termo_encontrado:
             continue
 
-        # Extrai campos relevantes
-        titulo = (mat.get("titulo") or mat.get("title") or
-                  mat.get("ementa") or "")[:200]
-        orgao  = (mat.get("orgao") or mat.get("secretaria") or
-                  mat.get("unidade") or mat.get("departamento") or "")
-        link   = (mat.get("link") or mat.get("url") or
-                  mat.get("href") or "")
+        # Extrai campos da matéria
+        if isinstance(item, dict):
+            titulo = (
+                item.get("titulo") or item.get("title") or
+                item.get("ementa") or item.get("assunto") or
+                item.get("descricao") or ""
+            )
+            orgao = (
+                item.get("orgao") or item.get("secretaria") or
+                item.get("unidade") or item.get("departamento") or
+                item.get("setor") or ""
+            )
+            link = (
+                item.get("link") or item.get("url") or
+                item.get("href") or ""
+            )
+            # Texto completo para o trecho
+            trecho = extrair_texto(item)[:500]
+        else:
+            titulo = texto_completo[:150]
+            orgao  = ""
+            link   = ""
+            trecho = texto_completo[:500]
+
+        # Filtra títulos que são textos de navegação
+        textos_nav = [
+            "filtros do resultado", "você está vendo",
+            "exibindo", "próxima página", "busca avançada"
+        ]
+        if any(t in titulo.lower() for t in textos_nav):
+            continue
 
         resultados.append({
             "termo_busca":     termo_encontrado,
-            "titulo":          titulo,
-            "orgao":           str(orgao)[:150],
+            "titulo":          str(titulo)[:200].strip(),
+            "orgao":           str(orgao)[:150].strip(),
             "data_publicacao": data_str,
             "link":            str(link),
-            "trecho":          " ".join(campos_texto)[:500],
+            "trecho":          trecho,
             "coletado_em":     date.today().isoformat(),
         })
 
     return resultados
+
+
+def dias_para_buscar(inicio: date, fim: date) -> list[date]:
+    """Retorna todos os dias (seg–sáb) entre início e fim."""
+    dias = []
+    atual = inicio
+    while atual <= fim:
+        if atual.weekday() < 6:  # 0=seg a 5=sáb (DO publica ter-sáb)
+            dias.append(atual)
+        atual += timedelta(days=1)
+    return dias
 
 
 def main():
@@ -262,64 +217,54 @@ def main():
     inicio = date(2023, 3, 1) if DIAS_ATRAS is None \
              else hoje - timedelta(days=DIAS_ATRAS - 1)
 
-    dt_ini_str = inicio.strftime("%d/%m/%Y")
-    dt_fim_str = hoje.strftime("%d/%m/%Y")
+    dt_ini = inicio.strftime("%d/%m/%Y")
+    dt_fim = hoje.strftime("%d/%m/%Y")
 
-    print(f"🗞  Monitor DO-SP | {dt_ini_str} → {dt_fim_str}")
-    print(f"🔑 {len(KEYWORDS)} termos\n")
+    print(f"🗞  Monitor DO-SP v4 | {dt_ini} → {dt_fim}")
+    print(f"🔑 {len(KEYWORDS)} termos monitorados")
 
-    todos  = []
-    vistos = set()
+    dias   = dias_para_buscar(inicio, hoje)
+    print(f"📅 {len(dias)} dias para verificar\n")
 
-    # ── Estratégia 1: JSON por edição diária ──────────────
-    dias = dias_uteis(inicio, hoje)
-    print(f"📅 {len(dias)} dias úteis para verificar\n")
+    todos       = []
+    vistos      = set()
+    dias_com_ed = 0
+    dias_sem_ed = 0
 
-    sucesso_json = 0
     for i, dia in enumerate(dias):
-        if i % 20 == 0:
-            print(f"  📖 Processando: {dia.strftime('%d/%m/%Y')} "
-                  f"({i+1}/{len(dias)})...")
-        dados = buscar_edicao_json(dia)
-        if dados:
-            encontrados = filtrar_edicao_json(dados, dia)
+        # Log de progresso a cada 30 dias
+        if i % 30 == 0:
+            print(f"  [{i+1:4d}/{len(dias)}] {dia.strftime('%d/%m/%Y')} "
+                  f"— {len(todos)} resultado(s) até agora...")
+
+        dados = baixar_edicao_json(dia)
+
+        if dados is not None:
+            dias_com_ed += 1
+            encontrados  = filtrar_edicao(dados, dia)
             for r in encontrados:
-                chave = r["link"] or r["titulo"]
+                chave = r["link"] or (r["titulo"] + r["data_publicacao"])
                 if chave not in vistos:
                     vistos.add(chave)
                     todos.append(r)
-            sucesso_json += 1
-        time.sleep(0.3)
+        else:
+            dias_sem_ed += 1
 
-    print(f"\n  ✓ JSON direto: {sucesso_json}/{len(dias)} edições lidas")
-    print(f"  → {len(todos)} resultado(s) via JSON\n")
+        time.sleep(0.4)  # gentileza com o servidor
 
-    # ── Estratégia 2: Pesquisa por termo (fallback/complemento) ──
-    print("🔎 Pesquisa por termo (complemento)...")
-    for kw in KEYWORDS:
-        print(f"  → {kw!r}...", end=" ", flush=True)
-        try:
-            res = buscar_via_pesquisa(kw, dt_ini_str, dt_fim_str)
-            novos = 0
-            for r in res:
-                chave = r["link"] or r["titulo"]
-                if chave not in vistos:
-                    vistos.add(chave)
-                    todos.append(r)
-                    novos += 1
-            print(f"{novos} novo(s)")
-        except Exception as e:
-            print(f"erro: {e}")
-        time.sleep(1.0)
+    print(f"\n📊 Resumo:")
+    print(f"   Edições encontradas: {dias_com_ed}")
+    print(f"   Dias sem edição:     {dias_sem_ed}")
+    print(f"   Resultados únicos:   {len(todos)}")
 
-    # Ordena por data desc
+    # Ordena por data decrescente
     todos.sort(key=lambda r: r.get("data_publicacao", ""), reverse=True)
 
     # Salva
     SAIDA.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "gerado_em":  hoje.isoformat(),
-        "periodo":    {"inicio": dt_ini_str, "fim": dt_fim_str},
+        "periodo":    {"inicio": dt_ini, "fim": dt_fim},
         "total":      len(todos),
         "resultados": todos,
     }
@@ -327,7 +272,7 @@ def main():
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8"
     )
-    print(f"\n✅ {len(todos)} resultado(s) salvos em {SAIDA}")
+    print(f"✅ Salvo em {SAIDA}")
 
 
 if __name__ == "__main__":
