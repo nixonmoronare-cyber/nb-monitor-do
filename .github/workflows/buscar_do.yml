@@ -1,33 +1,314 @@
-# .github/workflows/buscar_do.yml
-name: Buscar Diário Oficial SP
+#!/usr/bin/env python3
+"""
+buscar_do.py — Monitor DO-SP v5
+Usa Playwright com espera explícita dos elementos JS.
+Navega como um humano: abre a página, preenche o formulário, aguarda resultados.
+"""
 
-on:
-  schedule:
-    - cron: '0 11 * * 1-5'   # 08h Brasília (11h UTC), segunda a sexta
-  workflow_dispatch:           # Permite rodar manualmente com 1 clique
+import json, time
+from datetime import date, timedelta
+from pathlib import Path
+from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
-jobs:
-  buscar:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
+# ── Configuração ──────────────────────────────────────────
+KEYWORDS = [
+    "transferência de potencial construtivo",
+    "certidão de transferência de potencial",
+    "declaração de potencial construtivo",
+    "termo de compromisso",
+    "atestado de conservação",
+    "CONPRESP",
+    "projeto de restauro",
+    "imóvel tombado",
+    "bem tombado",
+    "ZEPEC",
+]
 
-    steps:
-      - name: Baixar repositório
-        uses: actions/checkout@v4
+DIAS_ATRAS = 7   # None = histórico desde 01/03/2023 | 1 = só hoje
 
-      - name: Instalar Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+SAIDA    = Path("docs/resultados.json")
+BASE_URL = "https://diariooficial.prefeitura.sp.gov.br/md_epubli_controlador.php"
+# ─────────────────────────────────────────────────────────
 
-      - name: Executar busca no DO
-        run: python buscar_do.py
 
-      - name: Salvar resultado
-        run: |
-          git config user.name  "NB Monitor Bot"
-          git config user.email "bot@nb-monitor"
-          git add docs/resultados.json
-          git diff --staged --quiet || git commit -m "Atualização: $(date '+%d/%m/%Y %H:%M')"
-          git push
+def buscar_termo(page, termo: str, dt_ini: str, dt_fim: str) -> list[dict]:
+    """
+    Navega até a página de busca, preenche o formulário
+    e extrai os resultados após o JS carregar.
+    """
+    resultados = []
+
+    # Monta URL de busca
+    from urllib.parse import urlencode
+    params = urlencode({
+        "acao":           "materias_pesquisar",
+        "chave":          termo,
+        "versao_diario":  "1",
+        "tipo_resultado": "0",
+        "periodo":        "2",
+        "data_inicio":    dt_ini,
+        "data_fim":       dt_fim,
+    })
+    url = f"{BASE_URL}?{params}"
+
+    try:
+        # Navega e aguarda rede estabilizar
+        page.goto(url, wait_until="networkidle", timeout=45000)
+
+        # Aguarda qualquer indicador de resultados ou "sem resultados"
+        try:
+            page.wait_for_selector(
+                "li.resultado-item, .resultado, article, "
+                ".materia-resultado, .sem-resultado, "
+                "[class*='resultado'], [class*='materia']",
+                timeout=15000
+            )
+        except PWTimeout:
+            # Tenta aguardar mais um pouco
+            page.wait_for_timeout(5000)
+
+        # Captura o HTML renderizado
+        html = page.content()
+
+        # Extrai o número total de resultados se disponível
+        total_el = page.query_selector(
+            "[class*='total'], [class*='contador'], "
+            ".paginacao-info, [class*='paginacao']"
+        )
+        total_txt = total_el.inner_text() if total_el else ""
+
+        import re
+        total_m = re.search(r'(\d[\d.]*)\s*(?:resultado|matéria|publicação)',
+                            total_txt, re.IGNORECASE)
+        if total_m:
+            print(f"  (≈{total_m.group(1)} resultados no portal)", end=" ")
+
+        # Extrai matérias com múltiplos seletores
+        seletores = [
+            "li.resultado-item",
+            ".resultado-item",
+            "article.materia",
+            ".materia-item",
+            "[class*='resultado-item']",
+            "li[class*='resultado']",
+        ]
+
+        items = []
+        for sel in seletores:
+            items = page.query_selector_all(sel)
+            if items:
+                break
+
+        # Se não encontrou com seletores específicos, tenta links de matérias
+        if not items:
+            links = page.query_selector_all(
+                "a[href*='materia_ver'], a[href*='materia_id'], "
+                "a[href*='edicao_ver']"
+            )
+            for a in links:
+                texto = a.inner_text().strip()
+                if len(texto) < 15:
+                    continue
+                href = a.get_attribute("href") or ""
+                link = href if href.startswith("http") else \
+                    f"https://diariooficial.prefeitura.sp.gov.br/{href.lstrip('/')}"
+                resultados.append({
+                    "termo_busca":     termo,
+                    "titulo":          texto[:200],
+                    "orgao":           "",
+                    "data_publicacao": "",
+                    "link":            link,
+                    "trecho":          texto[:400],
+                    "coletado_em":     date.today().isoformat(),
+                })
+            return resultados
+
+        # Processa cada item encontrado
+        for item in items:
+            texto = item.inner_text().strip()
+            if len(texto) < 15:
+                continue
+
+            # Filtra textos de navegação
+            nav_textos = ["filtros", "exibindo", "você está", "próxima",
+                          "anterior", "busca avançada"]
+            if any(t in texto.lower() for t in nav_textos):
+                continue
+
+            # Link
+            a_tag = item.query_selector("a")
+            link = ""
+            if a_tag:
+                href = a_tag.get_attribute("href") or ""
+                link = href if href.startswith("http") else \
+                    f"https://diariooficial.prefeitura.sp.gov.br/{href.lstrip('/')}"
+
+            # Título
+            titulo_el = item.query_selector("h2,h3,h4,strong,.titulo,.ementa")
+            titulo = titulo_el.inner_text().strip() if titulo_el else texto[:150]
+
+            # Órgão
+            orgao_el = item.query_selector(
+                "[class*='orgao'],[class*='secretaria'],[class*='unidade']"
+            )
+            orgao = orgao_el.inner_text().strip() if orgao_el else ""
+
+            # Data
+            data_el = item.query_selector("[class*='data'],[class*='date']")
+            data_pub = data_el.inner_text().strip() if data_el else ""
+
+            resultados.append({
+                "termo_busca":     termo,
+                "titulo":          titulo[:200],
+                "orgao":           orgao,
+                "data_publicacao": data_pub,
+                "link":            link,
+                "trecho":          texto[:500],
+                "coletado_em":     date.today().isoformat(),
+            })
+
+        # Paginação: verifica se há mais páginas
+        prox = page.query_selector(
+            "a[class*='proxima'], a[class*='next'], "
+            ".paginacao a:last-child, [aria-label='Próxima']"
+        )
+        if prox and len(resultados) > 0:
+            try:
+                prox.click()
+                page.wait_for_load_state("networkidle", timeout=15000)
+                # Recursivo para página 2 (limita a 1 nível extra)
+                mais = buscar_pagina_extra(page, termo)
+                resultados.extend(mais)
+            except Exception:
+                pass
+
+    except PWTimeout:
+        print(f"  timeout", end=" ")
+    except Exception as e:
+        print(f"  erro: {str(e)[:50]}", end=" ")
+
+    return resultados
+
+
+def buscar_pagina_extra(page, termo: str) -> list[dict]:
+    """Extrai resultados de página adicional (paginação)."""
+    resultados = []
+    try:
+        items = page.query_selector_all(
+            "li.resultado-item, .resultado-item, article.materia"
+        )
+        for item in items:
+            texto = item.inner_text().strip()
+            if len(texto) < 15:
+                continue
+            a_tag = item.query_selector("a")
+            link = ""
+            if a_tag:
+                href = a_tag.get_attribute("href") or ""
+                link = href if href.startswith("http") else \
+                    f"https://diariooficial.prefeitura.sp.gov.br/{href.lstrip('/')}"
+            resultados.append({
+                "termo_busca":     termo,
+                "titulo":          texto[:200],
+                "orgao":           "",
+                "data_publicacao": "",
+                "link":            link,
+                "trecho":          texto[:500],
+                "coletado_em":     date.today().isoformat(),
+            })
+    except Exception:
+        pass
+    return resultados
+
+
+def main():
+    hoje   = date.today()
+    inicio = date(2023, 3, 1) if DIAS_ATRAS is None \
+             else hoje - timedelta(days=DIAS_ATRAS - 1)
+
+    dt_ini = inicio.strftime("%d/%m/%Y")
+    dt_fim = hoje.strftime("%d/%m/%Y")
+
+    print(f"🗞  Monitor DO-SP v5 | {dt_ini} → {dt_fim}")
+    print(f"🔑 {len(KEYWORDS)} termos\n")
+
+    todos  = []
+    vistos = set()
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-blink-features=AutomationControlled",
+            ]
+        )
+        context = browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+            locale="pt-BR",
+            viewport={"width": 1280, "height": 800},
+            # Esconde que é um browser automatizado
+            extra_http_headers={
+                "Accept-Language": "pt-BR,pt;q=0.9",
+            }
+        )
+
+        # Remove flag de webdriver (evita detecção de bot)
+        context.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        )
+
+        page = context.new_page()
+
+        # Visita a página inicial primeiro (estabelece sessão/cookies)
+        print("🌐 Estabelecendo sessão...")
+        try:
+            page.goto(BASE_URL + "?acao=inicio", wait_until="networkidle",
+                      timeout=30000)
+            page.wait_for_timeout(2000)
+            print("   Sessão estabelecida ✓\n")
+        except Exception as e:
+            print(f"   Aviso: {e}\n")
+
+        for kw in KEYWORDS:
+            print(f"  🔎 {kw!r}...", end=" ", flush=True)
+            try:
+                res   = buscar_termo(page, kw, dt_ini, dt_fim)
+                novos = 0
+                for r in res:
+                    chave = r["link"] or r["titulo"]
+                    if chave not in vistos:
+                        vistos.add(chave)
+                        todos.append(r)
+                        novos += 1
+                print(f"{novos} resultado(s)")
+            except Exception as e:
+                print(f"ERRO: {e}")
+            time.sleep(3)  # pausa entre buscas
+
+        browser.close()
+
+    print(f"\n✅ Total: {len(todos)} resultado(s)")
+
+    # Salva
+    SAIDA.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "gerado_em":  hoje.isoformat(),
+        "periodo":    {"inicio": dt_ini, "fim": dt_fim},
+        "total":      len(todos),
+        "resultados": todos,
+    }
+    SAIDA.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+    print(f"💾 Salvo em {SAIDA}")
+
+
+if __name__ == "__main__":
+    main()
